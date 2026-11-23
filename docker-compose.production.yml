@@ -53,6 +53,9 @@ services:
 
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3510}:3000"
+    networks:
+    - postiz-network
+    - temporal-network
 
   orchestrator:
     <<: *app
@@ -61,8 +64,16 @@ services:
       - --filter
       - ./apps/orchestrator
       - start
+    
+    networks:
+      - postiz-network
+      - temporal-network
 
 networks:
   postiz-network:
     external: true
-    name: ${POSTIZ_NETWORK:?required}
+    name: ${POSTIZ_NETWORK}
+
+  temporal-network:
+    external: true
+    name: temporal-network
