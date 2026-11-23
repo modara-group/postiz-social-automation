@@ -5,7 +5,7 @@ x-app: &app
   image: postiz-production:latest
   build:
     context: .
-    dockerfile: Dockerfile.production
+    dockerfile: Dockerfile
     target: production
     args:
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:?required}
