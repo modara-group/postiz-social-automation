@@ -1,0 +1,68 @@
+
+name: postiz-production
+
+x-app: &app
+  image: postiz-production:latest
+  build:
+    context: .
+    dockerfile: Dockerfile.production
+    target: production
+    args:
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:?required}
+      NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY: ${NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY:-}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+
+  env_file:
+    - .env
+
+  restart: unless-stopped
+  init: true
+
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+  networks:
+    - postiz-network
+
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+
+  frontend:
+    <<: *app
+    command:
+      - pnpm
+      - --filter
+      - ./apps/frontend
+      - start
+
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-4200}:4200"
+
+  backend:
+    <<: *app
+    command:
+      - pnpm
+      - --filter
+      - ./apps/backend
+      - start
+
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-3510}:3000"
+
+  orchestrator:
+    <<: *app
+    command:
+      - pnpm
+      - --filter
+      - ./apps/orchestrator
+      - start
+
+networks:
+  postiz-network:
+    external: true
+    name: ${POSTIZ_NETWORK:?required}
