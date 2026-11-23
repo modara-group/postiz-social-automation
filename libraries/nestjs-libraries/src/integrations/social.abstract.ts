@@ -1,5 +1,6 @@
 import { timer } from '@gitroom/helpers/utils/timer';
 import { Integration } from '@prisma/client';
+import { fetch as undiciFetch } from 'undici';
 import {
   AuthTokenDetails,
   PendingCheckResponse,
@@ -327,16 +328,57 @@ export abstract class SocialAbstract {
     }
   }
 
+  resolveLocalUpload(path: string): string | null {
+    if (process.env.STORAGE_PROVIDER !== 'local') {
+      return null;
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL;
+    const uploadDirectory = process.env.UPLOAD_DIRECTORY;
+
+    if (!frontendUrl || !uploadDirectory) {
+      return null;
+    }
+
+    let url: URL;
+    try {
+      url = new URL(path);
+    } catch {
+      return null;
+    }
+
+    if (url.origin !== new URL(frontendUrl).origin) {
+      return null;
+    }
+
+    if (!url.pathname.startsWith('/uploads/')) {
+      return null;
+    }
+
+    const relativePath = decodeURIComponent(
+      url.pathname.slice('/uploads/'.length)
+    );
+
+    const filePath = resolve(uploadDirectory, relativePath);
+
+    return this.localMediaPath(filePath, this.identifier);
+  }
+
   // Resolves the total byte size of the media without loading it into memory:
   // a HEAD request for remote URLs, statSync for local files.
   protected async mediaSize(path: string, identifier = ''): Promise<number> {
+    const localPath = this.resolveLocalUpload(path);
+
+    if (localPath) {
+      return statSync(localPath).size;
+    }
     if (path.indexOf('http') === 0) {
       // the media path is user-influenced, keep the SSRF-safe dispatcher that
       // this.fetch applies to every other outbound request. identity encoding
       // so content-length matches the bytes a later GET actually streams
       // (fetch transparently decompresses encoded bodies).
       setHeartbeatDetails(`media size ${stripQuery(path)}`);
-      const head = await fetch(path, {
+      const head = await undiciFetch(path, {
         method: 'HEAD',
         headers: { 'accept-encoding': 'identity' },
         dispatcher: getSsrfSafeDispatcher(),
@@ -389,6 +431,14 @@ export abstract class SocialAbstract {
     identifier = '',
     retried = false
   ): Promise<Buffer> {
+
+    const localPath = this.resolveLocalUpload(path);
+
+    if (localPath) {
+      path = localPath;
+    }
+
+
     if (path.indexOf('http') === 0) {
       setHeartbeatDetails(
         `media chunk ${start}-${end} ${stripQuery(path)}`
@@ -462,6 +512,14 @@ export abstract class SocialAbstract {
     path: string,
     identifier = ''
   ): Promise<Readable> {
+
+    const localPath = this.resolveLocalUpload(path);
+
+    if (localPath) {
+      return createReadStream(localPath);
+    }
+
+
     if (path.indexOf('http') !== 0) {
       return createReadStream(this.localMediaPath(path, identifier));
     }
@@ -623,14 +681,16 @@ export abstract class SocialAbstract {
     // providers carry access_token there and details are stored by Temporal.
     setHeartbeatDetails(`fetch ${stripQuery(url)}`);
 
-    const request = await fetch(url, {
-      ...options,
-      // @ts-ignore - undici-only option, not in the lib.dom RequestInit type
-      dispatcher: (options as any).dispatcher ?? getSsrfSafeDispatcher(),
-    });
+    const request = await undiciFetch(
+      url,
+      {
+        ...options,
+        dispatcher: (options as any).dispatcher ?? getSsrfSafeDispatcher(),
+      } as any
+    );
 
     if (request.status === 200 || request.status === 201) {
-      return request;
+      return request as unknown as Response;
     }
 
     let json = '{}';

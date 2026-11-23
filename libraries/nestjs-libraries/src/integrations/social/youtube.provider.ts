@@ -6,6 +6,7 @@ import {
   PostResponse,
   SocialProvider,
 } from '@gitroom/nestjs-libraries/integrations/social/social.integrations.interface';
+import { fetch as undiciFetch } from 'undici';
 import { Integration } from '@prisma/client';
 import { makeSecureId } from '@gitroom/nestjs-libraries/services/make.secure.id';
 import { google } from 'googleapis';
@@ -27,6 +28,8 @@ import { getSsrfSafeDispatcher } from '@gitroom/nestjs-libraries/dtos/webhooks/s
 import { setHeartbeatDetails } from '@gitroom/nestjs-libraries/temporal/temporal.heartbeat';
 import { Rules } from '@gitroom/nestjs-libraries/chat/rules.description.decorator';
 import { DashboardFunction } from '@gitroom/nestjs-libraries/integrations/dashboard.function.decorator';
+import { resolve } from 'node:path';
+
 
 const clientAndYoutube = () => {
   const client = new google.auth.OAuth2({
@@ -466,17 +469,30 @@ export class YoutubeProvider extends SocialAbstract implements SocialProvider {
   // Resolves the total byte size of the media without loading it into memory:
   // a HEAD request for remote URLs, statSync for local files.
   private async youtubeMediaSize(path: string): Promise<number> {
+
+
+    const localPath = this.resolveLocalUpload(path);
+
+    if (localPath) {
+      return statSync(localPath).size;
+    }
+
     if (path.indexOf('http') === 0) {
       // the media path is user-influenced, keep the SSRF-safe dispatcher that
       // this.fetch applies to every other outbound request. identity encoding
       // so content-length matches the bytes a later GET actually streams
       // (fetch transparently decompresses encoded bodies).
       setHeartbeatDetails(`youtube: media size ${stripQuery(path)}`);
-      const head = await fetch(path, {
-        method: 'HEAD',
-        headers: { 'accept-encoding': 'identity' },
-        dispatcher: getSsrfSafeDispatcher(),
-      } as any);
+      const head = await undiciFetch(path, {
+      method: 'HEAD', 
+      headers: { 'accept-encoding': 'identity' },
+      dispatcher: getSsrfSafeDispatcher(),
+      redirect: 'error',
+    });
+
+    if (!head.ok) {
+      throw new Error(`Media HEAD failed: HTTP ${head.status}`);
+    }
       const length = head.headers.get('content-length');
       if (!length) {
         throw new BadBody(
@@ -496,6 +512,14 @@ export class YoutubeProvider extends SocialAbstract implements SocialProvider {
   // never hold the whole file in memory: a ranged GET for remote URLs, a ranged
   // read stream for local files.
   private async youtubeChunkStream(path: string, start: number, end: number) {
+
+    const localPath = this.resolveLocalUpload(path);
+
+    if (localPath) {
+      return createReadStream(localPath, { start, end });
+    }
+
+
     if (path.indexOf('http') === 0) {
       // identity encoding so the store keeps content-length and can answer
       // with the requested range: a transformed (compressed) response loses
@@ -503,13 +527,18 @@ export class YoutubeProvider extends SocialAbstract implements SocialProvider {
       setHeartbeatDetails(
         `youtube: read media ${start}-${end} ${stripQuery(path)}`
       );
-      const response = await fetch(path, {
+      const response = await undiciFetch(path, {
         headers: {
           Range: `bytes=${start}-${end}`,
           'accept-encoding': 'identity',
         },
         dispatcher: getSsrfSafeDispatcher(),
+        redirect: 'error',
       } as any);
+
+      if (!response.ok) {
+        throw new Error(`Media HEAD failed: HTTP ${response.status}`);
+      }
 
       // A store that ignores Range (200 with the full file) or answers with an
       // error page would corrupt the upload at this offset.
@@ -542,16 +571,19 @@ export class YoutubeProvider extends SocialAbstract implements SocialProvider {
     videoSize: number
   ): Promise<{ videoId: string } | { uploadedBytes: number }> {
     setHeartbeatDetails('youtube: probe resumable session');
-    const probe = await fetch(uploadUri, {
+    const probe = await undiciFetch(uploadUri, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Range': `bytes */${videoSize}`,
       },
+      // A resumable-upload status probe reports an incomplete upload with 308.
+      // Keep that response visible so the status branches below can resume it.
+      redirect: 'manual',
     });
 
     if (probe.status === 200 || probe.status === 201) {
-      const { id } = await probe.json();
+      const { id } = await probe.json() as any;
       return { videoId: String(id) };
     }
 

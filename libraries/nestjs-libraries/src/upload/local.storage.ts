@@ -1,6 +1,7 @@
 import { IUploadProvider, UploadedStream } from './upload.interface';
 import { createWriteStream, mkdirSync, unlink, writeFileSync } from 'fs';
 import { resolve, sep } from 'path';
+import { fetch as undiciFetch } from 'undici';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { isSafePublicHttpsUrl } from '@gitroom/nestjs-libraries/dtos/webhooks/webhook.url.validator';
@@ -57,13 +58,15 @@ export class LocalStorage implements IUploadProvider {
     if (dataUrl) {
       body = dataUrl.buffer;
     } else {
-      if (!(await isSafePublicHttpsUrl(path))) {
-        throw new Error('Unsafe URL');
-      }
-      const loadImage = await fetch(path, {
-        // @ts-ignore — undici option, not in lib.dom fetch types
+      const loadImage = await undiciFetch(path, {
         dispatcher: ssrfSafeDispatcher,
+        redirect: 'error',
       });
+
+      if (!loadImage.ok) {
+        throw new Error(`Image download failed: ${loadImage.status}`);
+      }
+
       body = Buffer.from(await loadImage.arrayBuffer());
     }
 

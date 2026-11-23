@@ -1419,7 +1419,9 @@ export class PostsService {
         orgId,
         state
       );
-    } catch (err) {}
+    } catch (err) {
+      console.error('Error starting workflow:', err);
+    }
 
     return { id, state };
   }
@@ -1457,7 +1459,9 @@ export class PostsService {
           orgId,
           getPostById.state === 'DRAFT' ? 'DRAFT' : 'QUEUE'
         );
-      } catch (err) {}
+      } catch (err) {
+        console.error('Error starting workflow:', err);
+      }
     }
 
     return newDate;
